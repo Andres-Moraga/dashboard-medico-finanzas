@@ -64,13 +64,14 @@ supabase = init_connection()
 # ==============================================================================
 @st.cache_data(ttl=600)
 def load_data():
-    # MODIFICACIÓN: Agregamos .range(0, 5000) para saltar el límite por defecto de 1000
+    # Traemos todas las transacciones ordenadas por fecha
+    # FIX: Aumentamos el rango a 7000 para traer todo el historial
     response = supabase.table("transactions")\
-        .select("*")\
+        .select("*", count="exact")\
         .order("payment_date", desc=True)\
         .range(0, 7000)\
         .execute()
-    
+        
     df = pd.DataFrame(response.data)
     
     if df.empty:
@@ -78,14 +79,12 @@ def load_data():
 
     # Conversión de tipos
     # errors='coerce' convertirá fechas inválidas a NaT.
-    # IMPORTANTE: Asumimos formato ISO (YYYY-MM-DD) que viene de Supabase
     df['payment_date'] = pd.to_datetime(df['payment_date'], errors='coerce')
     df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
     df['net_amount'] = pd.to_numeric(df['net_amount'], errors='coerce').fillna(0)
     
-    # Debug: Si hay fechas NaT, las llenamos, pero intentamos preservar la data real
+    # Manejo de fechas nulas para evitar errores
     if df['payment_date'].isna().any():
-        # Fallback solo para las nulas
         df['payment_date'] = df['payment_date'].fillna(pd.Timestamp.now())
 
     # Columnas derivadas
@@ -117,7 +116,7 @@ with st.sidebar:
     if not df.empty:
         # Filtro Año
         years = sorted(df['Año'].unique(), reverse=True)
-        # Seleccionamos el primer año disponible por defecto (el más reciente, ej 2025)
+        # Seleccionamos el primer año disponible por defecto (el más reciente)
         default_idx = 0 
         selected_year = st.selectbox("📅 Año Fiscal", years, index=default_idx, format_func=lambda x: str(x))
         
