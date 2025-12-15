@@ -78,7 +78,9 @@ def load_data():
     
     # Columnas derivadas
     df['Mes'] = df['payment_date'].dt.strftime('%Y-%m')
-    df['Año'] = df['payment_date'].dt.year
+    # Año como entero para evitar el ".0"
+    df['Año'] = df['payment_date'].dt.year.astype(int)
+    
     df['Origen_Label'] = df['source'].map({
         'CAS_A': 'Alemana Ambulatorio',
         'CAS_H': 'Alemana Hospitalario',
@@ -100,9 +102,10 @@ with st.sidebar:
     st.title("Filtros")
     
     if not df.empty:
-        # Filtro Año
+        # Filtro Año (Formato sin separador de miles)
         years = sorted(df['Año'].unique(), reverse=True)
-        selected_year = st.selectbox("📅 Año Fiscal", years, index=0)
+        # Usamos format_func para mostrar "2025" limpio
+        selected_year = st.selectbox("📅 Año Fiscal", years, index=0, format_func=lambda x: str(x))
         
         # Filtro Mes (Multiselect)
         months_available = sorted(df[df['Año'] == selected_year]['Mes'].unique(), reverse=True)
@@ -172,12 +175,12 @@ with col_izq:
     
     chart_mensual = alt.Chart(df_filtered).mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5).encode(
         x=alt.X('Mes:O', title='Mes'),
-        y=alt.Y('sum(net_amount):Q', title='Monto Líquido ($)'),
+        y=alt.Y('sum(net_amount):Q', title='Monto Líquido ($)', axis=alt.Axis(format="$,.0f")), # Eje con $
         color=alt.Color('Origen_Label:N', legend=alt.Legend(title="Origen", orient="top")),
         tooltip=[
             alt.Tooltip('Mes', title='Periodo'),
             alt.Tooltip('Origen_Label', title='Fuente'),
-            alt.Tooltip('sum(net_amount)', title='Monto', format=",.0f")
+            alt.Tooltip('sum(net_amount)', title='Monto', format="$,.0f") # Tooltip con $
         ]
     ).properties(height=350)
     
@@ -186,14 +189,29 @@ with col_izq:
 with col_der:
     st.subheader("🏥 Distribución por Origen")
     
-    chart_donut = alt.Chart(df_filtered).mark_arc(innerRadius=60).encode(
-        theta=alt.Theta(field="net_amount", type="quantitative", aggregate="sum"),
-        color=alt.Color(field="Origen_Label", type="nominal", legend=None),
-        order=alt.Order("net_amount", sort="descending"),
-        tooltip=['Origen_Label', alt.Tooltip('sum(net_amount)', format=",.0f", title="Total")]
-    ).properties(height=350)
+    # Datos para el gráfico de torta
+    pie_data = df_filtered.groupby('Origen_Label')['net_amount'].sum().reset_index()
     
-    st.altair_chart(chart_donut, use_container_width=True)
+    # Gráfico Base (Arco)
+    base = alt.Chart(pie_data).encode(
+        theta=alt.Theta("net_amount", stack=True)
+    )
+
+    # El Donut
+    pie = base.mark_arc(innerRadius=60, outerRadius=120).encode(
+        color=alt.Color("Origen_Label", legend=alt.Legend(title=None, orient="bottom")), # Leyenda abajo
+        order=alt.Order("net_amount", sort="descending"),
+        tooltip=["Origen_Label", alt.Tooltip("net_amount", format="$,.0f")]
+    )
+
+    # Etiquetas de texto sobre el gráfico
+    text = base.mark_text(radius=140).encode(
+        text=alt.Text("net_amount", format="$,.0s"), # Formato corto (ej: $1M)
+        order=alt.Order("net_amount", sort="descending"),
+        color=alt.value("black")  
+    )
+
+    st.altair_chart(pie + text, use_container_width=True)
 
 # --- ANÁLISIS DE PROCEDIMIENTOS ---
 st.subheader("🩺 Top 10 Prestaciones (Lo que más genera)")
@@ -202,10 +220,10 @@ top_procedimientos = df_filtered.groupby('description')['net_amount'].sum().rese
 top_procedimientos = top_procedimientos.sort_values('net_amount', ascending=False).head(10)
 
 chart_top = alt.Chart(top_procedimientos).mark_bar().encode(
-    x=alt.X('net_amount:Q', title='Ingresos Generados ($)'),
-    y=alt.Y('description:N', sort='-x', title=None, axis=alt.Axis(labelLimit=300)), # Label largo
+    x=alt.X('net_amount:Q', title='Ingresos Generados ($)', axis=alt.Axis(format="$,.0f")),
+    y=alt.Y('description:N', sort='-x', title=None, axis=alt.Axis(labelLimit=300)), 
     color=alt.value('#2E86C1'),
-    tooltip=[alt.Tooltip('description', title='Prestación'), alt.Tooltip('net_amount', format=",.0f")]
+    tooltip=[alt.Tooltip('description', title='Prestación'), alt.Tooltip('net_amount', format="$,.0f")]
 ).properties(height=400)
 
 st.altair_chart(chart_top, use_container_width=True)
