@@ -64,8 +64,13 @@ supabase = init_connection()
 # ==============================================================================
 @st.cache_data(ttl=600)
 def load_data():
-    # Traemos todas las transacciones ordenadas por fecha
-    response = supabase.table("transactions").select("*").order("payment_date", desc=True).execute()
+    # MODIFICACIÓN: Agregamos .range(0, 5000) para saltar el límite por defecto de 1000
+    response = supabase.table("transactions")\
+        .select("*")\
+        .order("payment_date", desc=True)\
+        .range(0, 5000)\
+        .execute()
+    
     df = pd.DataFrame(response.data)
     
     if df.empty:
