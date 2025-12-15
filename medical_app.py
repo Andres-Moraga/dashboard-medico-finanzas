@@ -72,19 +72,21 @@ def load_data():
         return df
 
     # Conversión de tipos
-    # errors='coerce' convertirá fechas inválidas a NaT (Not a Time)
+    # errors='coerce' convertirá fechas inválidas a NaT.
+    # IMPORTANTE: Asumimos formato ISO (YYYY-MM-DD) que viene de Supabase
     df['payment_date'] = pd.to_datetime(df['payment_date'], errors='coerce')
     df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
     df['net_amount'] = pd.to_numeric(df['net_amount'], errors='coerce').fillna(0)
     
-    # Manejo de fechas nulas: Si payment_date es NaT, usamos la fecha de hoy como fallback
-    # Esto evita el error IntCastingNaNError
-    df['payment_date'] = df['payment_date'].fillna(pd.Timestamp.now())
+    # Debug: Si hay fechas NaT, las llenamos, pero intentamos preservar la data real
+    if df['payment_date'].isna().any():
+        # Fallback solo para las nulas
+        df['payment_date'] = df['payment_date'].fillna(pd.Timestamp.now())
 
     # Columnas derivadas
     df['Mes'] = df['payment_date'].dt.strftime('%Y-%m')
     
-    # Año como entero (ahora seguro porque no hay NaT)
+    # Año como entero
     df['Año'] = df['payment_date'].dt.year.astype(int)
     
     df['Origen_Label'] = df['source'].map({
@@ -108,10 +110,11 @@ with st.sidebar:
     st.title("Filtros")
     
     if not df.empty:
-        # Filtro Año (Formato sin separador de miles)
+        # Filtro Año
         years = sorted(df['Año'].unique(), reverse=True)
-        # Usamos format_func para mostrar "2025" limpio
-        selected_year = st.selectbox("📅 Año Fiscal", years, index=0, format_func=lambda x: str(x))
+        # Seleccionamos el primer año disponible por defecto (el más reciente, ej 2025)
+        default_idx = 0 
+        selected_year = st.selectbox("📅 Año Fiscal", years, index=default_idx, format_func=lambda x: str(x))
         
         # Filtro Mes (Multiselect)
         months_available = sorted(df[df['Año'] == selected_year]['Mes'].unique(), reverse=True)
@@ -181,12 +184,12 @@ with col_izq:
     
     chart_mensual = alt.Chart(df_filtered).mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5).encode(
         x=alt.X('Mes:O', title='Mes'),
-        y=alt.Y('sum(net_amount):Q', title='Monto Líquido ($)', axis=alt.Axis(format="$,.0f")), # Eje con $
+        y=alt.Y('sum(net_amount):Q', title='Monto Líquido ($)', axis=alt.Axis(format="$,.0f")), 
         color=alt.Color('Origen_Label:N', legend=alt.Legend(title="Origen", orient="top")),
         tooltip=[
             alt.Tooltip('Mes', title='Periodo'),
             alt.Tooltip('Origen_Label', title='Fuente'),
-            alt.Tooltip('sum(net_amount)', title='Monto', format="$,.0f") # Tooltip con $
+            alt.Tooltip('sum(net_amount)', title='Monto', format="$,.0f")
         ]
     ).properties(height=350)
     
@@ -205,14 +208,14 @@ with col_der:
 
     # El Donut
     pie = base.mark_arc(innerRadius=60, outerRadius=120).encode(
-        color=alt.Color("Origen_Label", legend=alt.Legend(title=None, orient="bottom")), # Leyenda abajo
+        color=alt.Color("Origen_Label", legend=alt.Legend(title=None, orient="bottom")),
         order=alt.Order("net_amount", sort="descending"),
         tooltip=["Origen_Label", alt.Tooltip("net_amount", format="$,.0f")]
     )
 
-    # Etiquetas de texto sobre el gráfico
+    # Etiquetas de texto
     text = base.mark_text(radius=140).encode(
-        text=alt.Text("net_amount", format="$,.0s"), # Formato corto (ej: $1M)
+        text=alt.Text("net_amount", format="$,.0s"), 
         order=alt.Order("net_amount", sort="descending"),
         color=alt.value("black")  
     )
