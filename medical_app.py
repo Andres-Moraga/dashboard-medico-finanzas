@@ -72,13 +72,19 @@ def load_data():
         return df
 
     # Conversión de tipos
-    df['payment_date'] = pd.to_datetime(df['payment_date'])
-    df['event_date'] = pd.to_datetime(df['event_date'])
+    # errors='coerce' convertirá fechas inválidas a NaT (Not a Time)
+    df['payment_date'] = pd.to_datetime(df['payment_date'], errors='coerce')
+    df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
     df['net_amount'] = pd.to_numeric(df['net_amount'], errors='coerce').fillna(0)
     
+    # Manejo de fechas nulas: Si payment_date es NaT, usamos la fecha de hoy como fallback
+    # Esto evita el error IntCastingNaNError
+    df['payment_date'] = df['payment_date'].fillna(pd.Timestamp.now())
+
     # Columnas derivadas
     df['Mes'] = df['payment_date'].dt.strftime('%Y-%m')
-    # Año como entero para evitar el ".0"
+    
+    # Año como entero (ahora seguro porque no hay NaT)
     df['Año'] = df['payment_date'].dt.year.astype(int)
     
     df['Origen_Label'] = df['source'].map({
@@ -88,7 +94,7 @@ def load_data():
     }).fillna(df['source'])
     
     # Limpieza de descripciones para gráficos
-    df['Glosa_Corta'] = df['description'].fillna('Sin Descripción').apply(lambda x: x[:30] + '...' if len(x) > 30 else x)
+    df['Glosa_Corta'] = df['description'].fillna('Sin Descripción').apply(lambda x: str(x)[:30] + '...' if len(str(x)) > 30 else str(x))
     
     return df
 
