@@ -68,7 +68,7 @@ def load_data():
     response = supabase.table("transactions")\
         .select("*")\
         .order("payment_date", desc=True)\
-        .range(0, 5000)\
+        .range(0, 7000)\
         .execute()
     
     df = pd.DataFrame(response.data)
