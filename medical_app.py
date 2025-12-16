@@ -5,7 +5,7 @@ from supabase import create_client, Client
 import datetime
 
 # ==============================================================================
-# 1. CONFIGURACIÓN DE LA PÁGINA
+# CONFIGURACIÓN
 # ==============================================================================
 st.set_page_config(
     page_title="Gestión Médica - Dr. Moraga",
@@ -14,10 +14,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS personalizados para un look médico profesional
 st.markdown("""
 <style>
-    /* Tarjetas de Métricas */
     .metric-container {
         background-color: #FFFFFF;
         border: 1px solid #E0E0E0;
@@ -26,26 +24,14 @@ st.markdown("""
         box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
         text-align: center;
     }
-    .metric-value {
-        font-size: 28px;
-        font-weight: bold;
-        color: #2C3E50;
-    }
-    .metric-label {
-        font-size: 14px;
-        color: #7F8C8D;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    /* Encabezados */
-    h1, h2, h3 {
-        color: #2E86C1;
-    }
+    .metric-value { font-size: 28px; font-weight: bold; color: #2C3E50; }
+    .metric-label { font-size: 14px; color: #7F8C8D; text-transform: uppercase; }
+    h1, h2, h3 { color: #2E86C1; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. CONEXIÓN A SUPABASE
+# CONEXIÓN & DATOS
 # ==============================================================================
 @st.cache_resource
 def init_connection():
@@ -59,226 +45,176 @@ def init_connection():
 
 supabase = init_connection()
 
-# ==============================================================================
-# 3. CARGA Y PROCESAMIENTO DE DATOS
-# ==============================================================================
 @st.cache_data(ttl=600)
 def load_data():
-    # Traemos todas las transacciones ordenadas por fecha
-    # FIX: Aumentamos el rango a 7000 para traer todo el historial
-    response = supabase.table("transactions")\
+    # 1. Cargar Transacciones Individuales
+    response_tx = supabase.table("transactions")\
         .select("*", count="exact")\
         .order("payment_date", desc=True)\
-        .range(0, 7000)\
+        .range(0, 10000)\
+        .execute()
+    
+    # 2. Cargar Vista de Eventos (Cirugías Agrupadas)
+    response_events = supabase.table("surgical_events_summary")\
+        .select("*")\
+        .order("payment_date", desc=True)\
+        .range(0, 5000)\
         .execute()
         
-    df = pd.DataFrame(response.data)
+    df_tx = pd.DataFrame(response_tx.data)
+    df_events = pd.DataFrame(response_events.data)
     
-    if df.empty:
-        return df
+    if df_tx.empty: return df_tx, df_events
 
-    # Conversión de tipos
-    # errors='coerce' convertirá fechas inválidas a NaT.
-    df['payment_date'] = pd.to_datetime(df['payment_date'], errors='coerce')
-    df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
-    df['net_amount'] = pd.to_numeric(df['net_amount'], errors='coerce').fillna(0)
+    # Procesamiento Transacciones
+    df_tx['payment_date'] = pd.to_datetime(df_tx['payment_date'], errors='coerce')
+    df_tx['event_date'] = pd.to_datetime(df_tx['event_date'], errors='coerce')
+    df_tx['net_amount'] = pd.to_numeric(df_tx['net_amount'], errors='coerce').fillna(0)
     
-    # Manejo de fechas nulas para evitar errores
-    if df['payment_date'].isna().any():
-        df['payment_date'] = df['payment_date'].fillna(pd.Timestamp.now())
+    if df_tx['payment_date'].isna().any():
+        df_tx['payment_date'] = df_tx['payment_date'].fillna(pd.Timestamp.now())
 
-    # Columnas derivadas
-    df['Mes'] = df['payment_date'].dt.strftime('%Y-%m')
+    df_tx['Mes'] = df_tx['payment_date'].dt.strftime('%Y-%m')
+    df_tx['Año'] = df_tx['payment_date'].dt.year.astype(int)
     
-    # Año como entero
-    df['Año'] = df['payment_date'].dt.year.astype(int)
-    
-    df['Origen_Label'] = df['source'].map({
+    df_tx['Origen_Label'] = df_tx['source'].map({
         'CAS_A': 'Alemana Ambulatorio',
         'CAS_H': 'Alemana Hospitalario',
         'AMCA': 'AMCA (Sociedad/Privado)'
-    }).fillna(df['source'])
-    
-    # Limpieza de descripciones para gráficos
-    df['Glosa_Corta'] = df['description'].fillna('Sin Descripción').apply(lambda x: str(x)[:30] + '...' if len(str(x)) > 30 else str(x))
-    
-    return df
+    }).fillna(df_tx['source'])
 
-df = load_data()
+    # Procesamiento Eventos
+    if not df_events.empty:
+        df_events['payment_date'] = pd.to_datetime(df_events['payment_date'], errors='coerce')
+        df_events['surgery_date'] = pd.to_datetime(df_events['surgery_date'], errors='coerce')
+        df_events['total_paid'] = pd.to_numeric(df_events['total_paid'], errors='coerce').fillna(0)
+        df_events['Mes'] = df_events['payment_date'].dt.strftime('%Y-%m')
+        df_events['Año'] = df_events['payment_date'].dt.year.astype(int)
+
+    return df_tx, df_events
+
+df, df_events = load_data()
 
 # ==============================================================================
-# 4. BARRA LATERAL (FILTROS)
+# SIDEBAR & FILTROS
 # ==============================================================================
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3774/3774299.png", width=80)
     st.title("Filtros")
     
     if not df.empty:
-        # Filtro Año
         years = sorted(df['Año'].unique(), reverse=True)
-        # Seleccionamos el primer año disponible por defecto (el más reciente)
-        default_idx = 0 
-        selected_year = st.selectbox("📅 Año Fiscal", years, index=default_idx, format_func=lambda x: str(x))
+        selected_year = st.selectbox("📅 Año Fiscal", years, index=0, format_func=lambda x: str(x))
         
-        # Filtro Mes (Multiselect)
         months_available = sorted(df[df['Año'] == selected_year]['Mes'].unique(), reverse=True)
         selected_months = st.multiselect("📆 Meses (Opcional)", months_available, default=[])
         
-        # Filtro Origen
         sources = df['Origen_Label'].unique()
         selected_sources = st.multiselect("🏥 Institución", sources, default=sources)
         
-        # Aplicar Filtros
-        df_filtered = df[
-            (df['Año'] == selected_year) & 
-            (df['Origen_Label'].isin(selected_sources))
-        ]
+        # Filtro Principal
+        df_filtered = df[(df['Año'] == selected_year) & (df['Origen_Label'].isin(selected_sources))]
         
+        # Filtro Eventos
+        if not df_events.empty:
+            df_events_filtered = df_events[df_events['Año'] == selected_year]
+        else:
+            df_events_filtered = pd.DataFrame()
+
         if selected_months:
             df_filtered = df_filtered[df_filtered['Mes'].isin(selected_months)]
+            if not df_events_filtered.empty:
+                df_events_filtered = df_events_filtered[df_events_filtered['Mes'].isin(selected_months)]
     else:
         st.warning("No hay datos disponibles.")
         st.stop()
-
+    
     st.markdown("---")
-    st.caption("Última actualización: " + datetime.datetime.now().strftime("%d/%m/%Y %H:%M"))
+    st.info(f"Registros: {len(df)}")
 
 # ==============================================================================
-# 5. PÁGINA PRINCIPAL
+# DASHBOARD
 # ==============================================================================
-
-# --- HEADER Y KPIS ---
 st.title(f"Resumen Financiero {selected_year}")
 
-col1, col2, col3, col4 = st.columns(4)
+# TABS
+tab1, tab2, tab3 = st.tabs(["📊 Resumen General", "🏥 Auditoría de Cirugías", "🔎 Buscador Detallado"])
 
-total_ingreso = df_filtered['net_amount'].sum()
-total_tx = len(df_filtered)
-ticket_promedio = total_ingreso / total_tx if total_tx > 0 else 0
-# Calcular mejor mes
-ingreso_mensual = df_filtered.groupby('Mes')['net_amount'].sum()
-mejor_mes = ingreso_mensual.idxmax() if not ingreso_mensual.empty else "-"
-mejor_mes_monto = ingreso_mensual.max() if not ingreso_mensual.empty else 0
-
-# Función auxiliar para renderizar tarjeta HTML
-def metric_card(label, value, prefix="$"):
-    return f"""
-    <div class="metric-container">
-        <div class="metric-label">{label}</div>
-        <div class="metric-value">{prefix} {value}</div>
-    </div>
-    """
-
-with col1:
-    st.markdown(metric_card("Ingreso Total Líquido", f"{total_ingreso:,.0f}".replace(",", "."), "$"), unsafe_allow_html=True)
-with col2:
-    st.markdown(metric_card("Procedimientos Pagados", f"{total_tx}", "#"), unsafe_allow_html=True)
-with col3:
-    st.markdown(metric_card("Valor Promedio x Prestación", f"{ticket_promedio:,.0f}".replace(",", "."), "$"), unsafe_allow_html=True)
-with col4:
-    st.markdown(metric_card(f"Mejor Mes ({mejor_mes})", f"{mejor_mes_monto:,.0f}".replace(",", "."), "$"), unsafe_allow_html=True)
-
-st.markdown("---")
-
-# --- GRÁFICOS PRINCIPALES ---
-col_izq, col_der = st.columns([2, 1])
-
-with col_izq:
-    st.subheader("💰 Evolución de Ingresos Mensuales")
+# --- TAB 1: GENERAL ---
+with tab1:
+    col1, col2, col3, col4 = st.columns(4)
+    total_ingreso = df_filtered['net_amount'].sum()
+    total_tx = len(df_filtered)
     
-    chart_mensual = alt.Chart(df_filtered).mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5).encode(
-        x=alt.X('Mes:O', title='Mes'),
-        y=alt.Y('sum(net_amount):Q', title='Monto Líquido ($)', axis=alt.Axis(format="$,.0f")), 
-        color=alt.Color('Origen_Label:N', legend=alt.Legend(title="Origen", orient="top")),
-        tooltip=[
-            alt.Tooltip('Mes', title='Periodo'),
-            alt.Tooltip('Origen_Label', title='Fuente'),
-            alt.Tooltip('sum(net_amount)', title='Monto', format="$,.0f")
-        ]
-    ).properties(height=350)
+    def metric_card(label, value, prefix="$"):
+        return f"""<div class="metric-container"><div class="metric-label">{label}</div><div class="metric-value">{prefix} {value}</div></div>"""
+
+    with col1: st.markdown(metric_card("Ingreso Total", f"{total_ingreso:,.0f}".replace(",", "."), "$"), unsafe_allow_html=True)
+    with col2: st.markdown(metric_card("Transacciones", f"{total_tx}", "#"), unsafe_allow_html=True)
     
-    st.altair_chart(chart_mensual, use_container_width=True)
-
-with col_der:
-    st.subheader("🏥 Distribución por Origen")
+    st.markdown("---")
     
-    # Datos para el gráfico de torta
-    pie_data = df_filtered.groupby('Origen_Label')['net_amount'].sum().reset_index()
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        chart_mensual = alt.Chart(df_filtered).mark_bar().encode(
+            x=alt.X('Mes:O', title='Mes'),
+            y=alt.Y('sum(net_amount):Q', title='Monto ($)', axis=alt.Axis(format="$,.0f")),
+            color='Origen_Label:N',
+            tooltip=['Mes', 'Origen_Label', alt.Tooltip('sum(net_amount)', format="$,.0f")]
+        ).properties(height=350)
+        st.altair_chart(chart_mensual, use_container_width=True)
     
-    # Gráfico Base (Arco)
-    base = alt.Chart(pie_data).encode(
-        theta=alt.Theta("net_amount", stack=True)
-    )
+    with c2:
+        # Top prestaciones
+        if 'description' in df_filtered.columns:
+            top_proc = df_filtered.groupby('description')['net_amount'].sum().reset_index().sort_values('net_amount', ascending=False).head(8)
+            chart_top = alt.Chart(top_proc).mark_bar().encode(
+                x=alt.X('net_amount:Q', title=None, axis=alt.Axis(format="$,.0f")),
+                y=alt.Y('description:N', sort='-x', title=None),
+                color=alt.value('#2E86C1'),
+                tooltip=['description', alt.Tooltip('net_amount', format="$,.0f")]
+            ).properties(height=350, title="Top Prestaciones")
+            st.altair_chart(chart_top, use_container_width=True)
 
-    # El Donut
-    pie = base.mark_arc(innerRadius=60, outerRadius=120).encode(
-        color=alt.Color("Origen_Label", legend=alt.Legend(title=None, orient="bottom")),
-        order=alt.Order("net_amount", sort="descending"),
-        tooltip=["Origen_Label", alt.Tooltip("net_amount", format="$,.0f")]
-    )
-
-    # Etiquetas de texto
-    text = base.mark_text(radius=140).encode(
-        text=alt.Text("net_amount", format="$,.0s"), 
-        order=alt.Order("net_amount", sort="descending"),
-        color=alt.value("black")  
-    )
-
-    st.altair_chart(pie + text, use_container_width=True)
-
-# --- ANÁLISIS DE PROCEDIMIENTOS ---
-st.subheader("🩺 Top 10 Prestaciones (Lo que más genera)")
-
-top_procedimientos = df_filtered.groupby('description')['net_amount'].sum().reset_index()
-top_procedimientos = top_procedimientos.sort_values('net_amount', ascending=False).head(10)
-
-chart_top = alt.Chart(top_procedimientos).mark_bar().encode(
-    x=alt.X('net_amount:Q', title='Ingresos Generados ($)', axis=alt.Axis(format="$,.0f")),
-    y=alt.Y('description:N', sort='-x', title=None, axis=alt.Axis(labelLimit=300)), 
-    color=alt.value('#2E86C1'),
-    tooltip=[alt.Tooltip('description', title='Prestación'), alt.Tooltip('net_amount', format="$,.0f")]
-).properties(height=400)
-
-st.altair_chart(chart_top, use_container_width=True)
-
-# ==============================================================================
-# 6. SECCIÓN: BUSCADOR AVANZADO
-# ==============================================================================
-st.markdown("---")
-st.subheader("🔍 Buscador de Detalle")
-
-text_search = st.text_input("Buscar por Paciente, Glosa o Código:", placeholder="Ej: Perez, Manguito, 2104051...")
-
-if text_search:
-    # Filtrar en el DF cargado (más rápido que ir a SQL para búsquedas simples)
-    mask = (
-        df['raw_patient_name'].astype(str).str.contains(text_search, case=False, na=False) |
-        df['description'].astype(str).str.contains(text_search, case=False, na=False)
-    )
-    df_results = df[mask]
+# --- TAB 2: AUDITORÍA DE CIRUGÍAS (VISTA AGRUPADA) ---
+with tab2:
+    st.markdown("### 🧬 Visor de Eventos Quirúrgicos")
+    st.markdown("Aquí se agrupan todos los códigos asociados a una misma **Cuenta (Hospitalario)** u **Orden de Pago (Ambulatorio)**.")
     
-    if not df_results.empty:
-        st.success(f"Se encontraron **{len(df_results)}** registros.")
+    if not df_events_filtered.empty:
+        # Ordenamos por monto total para ver las cirugías más importantes primero
+        df_events_filtered = df_events_filtered.sort_values('total_paid', ascending=False)
         
         st.dataframe(
-            df_results[['payment_date', 'raw_patient_name', 'description', 'Origen_Label', 'net_amount']],
+            df_events_filtered,
             column_config={
-                "payment_date": st.column_config.DateColumn("Fecha Pago", format="DD/MM/YYYY"),
-                "raw_patient_name": "Paciente",
-                "description": "Detalle Prestación",
-                "Origen_Label": "Fuente",
-                "net_amount": st.column_config.NumberColumn("Monto", format="$%d")
+                "event_id": "N° Cuenta / OP",
+                "payment_date": st.column_config.DateColumn("F. Pago", format="DD/MM/YYYY"),
+                "surgery_date": st.column_config.DateColumn("F. Cirugía", format="DD/MM/YYYY"),
+                "patient_name": "Paciente",
+                "total_paid": st.column_config.NumberColumn("Total Evento", format="$%d"),
+                "total_procedures": st.column_config.NumberColumn("# Ítems"),
+                "descriptions_summary": "Detalle Completo (Kit)",
+                "codes_list": "Códigos"
             },
+            hide_index=True,
             use_container_width=True,
-            hide_index=True
+            height=600
         )
     else:
-        st.info("No se encontraron resultados con ese término.")
-else:
-    # Mostrar últimos 10 movimientos por defecto
-    st.markdown("##### Últimos 10 Pagos Recibidos")
-    st.dataframe(
-        df_filtered.head(10)[['payment_date', 'raw_patient_name', 'description', 'Origen_Label', 'net_amount']],
-        use_container_width=True,
-        hide_index=True
-    )
+        st.info("No se encontraron eventos agrupados para este periodo.")
+
+# --- TAB 3: BUSCADOR DETALLADO ---
+with tab3:
+    st.subheader("🔍 Buscador de Transacciones Individuales")
+    text_search = st.text_input("Buscar:", placeholder="Paciente, Código, Glosa...")
+    
+    if text_search:
+        mask = (
+            df['raw_patient_name'].astype(str).str.contains(text_search, case=False, na=False) |
+            df['description'].astype(str).str.contains(text_search, case=False, na=False) |
+            (df['procedure_code'].astype(str).str.contains(text_search, case=False, na=False))
+        )
+        st.dataframe(df[mask][['payment_date', 'raw_patient_name', 'procedure_code', 'description', 'net_amount']], use_container_width=True)
+    else:
+        st.dataframe(df_filtered[['payment_date', 'raw_patient_name', 'procedure_code', 'description', 'net_amount']].head(50), use_container_width=True)
